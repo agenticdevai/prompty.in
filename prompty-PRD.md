@@ -23,6 +23,13 @@
 16. [Performance Requirements](#16-performance-requirements)
 17. [Development Roadmap](#17-development-roadmap)
 18. [Open Questions](#18-open-questions)
+19. [Security & Privacy](#19-security--privacy)
+20. [Testing Strategy](#20-testing-strategy)
+21. [Admin Dashboard](#21-admin-dashboard)
+22. [Analytics & Event Tracking](#22-analytics--event-tracking)
+23. [Launch & Go-to-Market Plan](#23-launch--go-to-market-plan)
+24. [Risk Register](#24-risk-register)
+25. [PWA & Mobile App Roadmap](#25-pwa--mobile-app-roadmap)
 
 ---
 
