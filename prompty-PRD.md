@@ -1117,4 +1117,433 @@ search=...
 
 ---
 
-*Document Owner: Vijith | Next Review: After Phase 1 completion*
+---
+
+## 19. Security & Privacy
+
+### Authentication Security
+- **Google OAuth only** for social login — no password storage on our servers
+- **JWT sessions** managed by Supabase Auth; access token TTL: 1 hour, refresh TTL: 7 days
+- **PKCE flow** for OAuth — prevents authorization code interception
+- **Rate limiting on auth endpoints:** 5 attempts/15 min per IP (Upstash Redis)
+
+### API Security
+- **Row Level Security (RLS)** on all Supabase tables — users can only read/write their own data
+- **API rate limits** (Upstash Redis):
+  - Anonymous: 60 req/min
+  - Authenticated free: 120 req/min
+  - Pro: 500 req/min
+- **Input validation** on all API routes via Zod schemas — no raw DB queries from user input
+- **CORS:** only allow `prompty.in` and `localhost` origins
+- **Content Security Policy** headers via `next.config.ts`
+
+### Content Security
+- **NSFW check** on every uploaded image — Claude Haiku + heuristic fallback
+- **Prompt text scanning** for banned keywords on submission
+- **Image uploads** proxied through server — never expose R2 bucket URLs directly
+- **No PII in analytics** — copy events store session_id hash, not device fingerprint
+
+### Privacy (India's DPDP Act 2023 Compliance)
+- **Data minimization:** collect only email, display name, avatar (from Google)
+- **Purpose limitation:** user data used only for auth and personalization
+- **Consent:** cookie consent banner on first visit (optional analytics)
+- **Data deletion:** "Delete my account" in profile settings — cascades to all user data within 30 days
+- **Privacy policy:** plain-language page at `prompty.in/privacy`
+- **No cross-site tracking:** PostHog self-hosted or configured with no cross-domain tracking
+
+### Infrastructure Security
+- **Secrets in environment variables** — never committed to repo; stored in Vercel/Railway env
+- **Supabase service key** only used server-side (never exposed to client)
+- **R2 bucket** not publicly listed; images served via signed CDN URLs
+- **Dependency scanning:** Dependabot + `npm audit` in CI
+
+---
+
+## 20. Testing Strategy
+
+### Unit Tests
+- **Tool:** Vitest
+- **Coverage targets:** utility functions, API route handlers, Zod schemas
+- **Key units to test:**
+  - Trending score formula
+  - Prompt dedup hash function
+  - Filter query builder
+  - Copy event throttle logic
+
+### Integration Tests
+- **Tool:** Vitest + Supabase local (via Docker)
+- **What to cover:**
+  - API routes: prompts CRUD, like toggle, collection add/remove
+  - Auth middleware (RLS enforcement)
+  - Scraper dedup engine
+
+### End-to-End Tests
+- **Tool:** Playwright
+- **Critical paths (must not break):**
+
+| Test | Scenario |
+|---|---|
+| Homepage loads | Prompts visible within 2s, no CLS |
+| Search | Type "cinematic" → relevant results appear |
+| Copy prompt | Click copy → toast shows → clipboard contains text |
+| Filter | Select "Midjourney" tab → grid updates |
+| Login | Google OAuth → redirect back → avatar shown |
+| Save to collection | Like → save modal → new collection created |
+| Prompt page | Navigate to `/p/slug` → image + copy button visible |
+| Mobile nav | Bottom nav active state correct on each route |
+
+### Visual Regression Tests
+- **Tool:** Playwright + `pixelmatch` or Chromatic (if budget allows)
+- **Snapshots:** prompt card, homepage hero, explore filter bar
+- Run on every PR to catch accidental layout changes
+
+### Performance Tests
+- **Tool:** Lighthouse CI (in GitHub Actions)
+- **Fail CI if:** Lighthouse performance score < 85, LCP > 3s, CLS > 0.1
+
+### CI Pipeline (GitHub Actions)
+```yaml
+on: [push, pull_request]
+jobs:
+  quality:
+    - npm run typecheck        # tsc --noEmit
+    - npm run lint             # ESLint
+    - npm run test             # Vitest unit + integration
+  e2e:
+    - npx playwright test      # critical paths
+  lighthouse:
+    - lhci autorun             # performance budget
+```
+
+---
+
+## 21. Admin Dashboard
+
+### Access
+- Route: `prompty.in/admin` (hidden from sitemap, robots.txt)
+- Auth: Supabase RLS — `users.role = 'admin'` required
+- Admin role assigned manually in DB by owner
+
+### Dashboard Sections
+
+**Overview (Home)**
+```
+┌──────────────────────────────────────────────────────┐
+│  Today: +142 prompts  |  Copies: 1,247  |  New users: 38 │
+│  Pending review: 23   |  NSFW flagged: 2             │
+└──────────────────────────────────────────────────────┘
+Sparklines: daily copies, views, new signups (7-day)
+```
+
+**Review Queue**
+- List of prompts with `quality_score` 4–6 (needs manual review)
+- Each row: thumbnail + prompt text preview + source + quality score + tags
+- Actions: ✅ Approve | ❌ Reject | ✏️ Edit then approve
+- Keyboard shortcuts: `a` = approve, `r` = reject, `j/k` = navigate
+- Bulk select + bulk approve/reject
+
+**Prompt Management**
+- Full prompt table with filters: approved/pending/rejected, source, category, date
+- Inline edit: title, tags, category, quality score
+- Soft-delete (sets `is_approved = false`, not actual delete)
+- Hard-delete option (with confirmation modal)
+
+**User Management**
+- User table: email, username, plan, join date, content count
+- Actions: ban user, upgrade to pro, reset password, delete account
+- View user's submitted prompts
+
+**Scraper Control Panel**
+- Per-source toggle: enable/disable scraper
+- Last run time + prompts harvested
+- Manual trigger: "Run Lexica scraper now"
+- Error log (last 50 errors per source)
+- Queue depth indicator (BullMQ jobs pending)
+
+**Analytics Snapshot**
+- Top 10 prompts by copies (today / week / all time)
+- Traffic by category
+- Search queries (top 50) — useful for content gaps
+- Copy-to-view conversion rate
+
+**Settings**
+- Add/remove admin users
+- Content moderation keywords list (auto-reject)
+- Toggle maintenance mode (shows coming-soon banner)
+- Feature flags: enable/disable community submissions, comments, pro paywall
+
+---
+
+## 22. Analytics & Event Tracking
+
+**Tool:** PostHog (self-hosted on Railway, or PostHog Cloud free tier)
+
+### Events to Track
+
+| Event | Properties | Trigger |
+|---|---|---|
+| `prompt_viewed` | prompt_id, category, ai_tool, source | Prompt page load |
+| `prompt_copied` | prompt_id, category, is_logged_in | Copy button click |
+| `prompt_liked` | prompt_id, category | Like button click |
+| `prompt_saved` | prompt_id, collection_id | Save to collection |
+| `search_performed` | query, results_count, filters_applied | Search submit |
+| `filter_applied` | filter_type, filter_value | Filter change |
+| `category_clicked` | category_name | Category pill click |
+| `tool_tab_clicked` | tool_name | AI tool tab click |
+| `user_signed_up` | method (google/email) | Auth success |
+| `collection_created` | is_public | New collection saved |
+| `prompt_submitted` | category, ai_tool | Submit form success |
+| `share_clicked` | platform, prompt_id | Share sheet action |
+| `scroll_depth` | depth_pct (25/50/75/100) | Scroll milestone |
+| `infinite_scroll_page` | page_number | New batch loaded |
+
+### Key Funnels
+
+**Conversion Funnel**
+```
+Land on homepage → Browse grid → View prompt page → Copy prompt → Sign up
+```
+
+**Retention Funnel**
+```
+Day 1 visit → Copy ≥1 prompt → Return day 2–7 → Save to collection → Pro upgrade
+```
+
+**Search → Discovery Funnel**
+```
+Search query → Filter applied → Prompt viewed → Prompt copied
+```
+
+### Dashboards to Build in PostHog
+
+1. **Daily Active Metrics** — copies, views, signups, search queries
+2. **Content Performance** — top prompts by copies, saves, shares this week
+3. **Search Gaps** — queries with 0 results (content opportunities)
+4. **Device Breakdown** — mobile vs desktop conversion rate (validate mobile-first bet)
+5. **Category Popularity** — which categories drive most copies
+
+### Privacy
+- No PII in events — use `distinct_id` (anonymous UUID), not email
+- PostHog `person_profiles: 'identified_only'` — no anonymous profiles stored
+- `posthog.opt_out_capturing()` available via cookie consent toggle
+
+---
+
+## 23. Launch & Go-to-Market Plan
+
+### Pre-Launch (4 weeks before)
+
+**Content Seeding**
+- Load minimum 500 high-quality prompts before any public announcement
+- Ensure all 11 categories have ≥30 prompts each
+- Hero section populated with curated "staff picks"
+
+**Beta Tester Recruitment**
+- DM 50 Indian AI art creators on Instagram/X with early access link
+- Post in: r/india, r/AIArt, r/midjourney — "Looking for beta testers for Indian AI prompt platform"
+- Create Discord server: `discord.gg/prompty` — early community hub
+- Collect feedback via simple Tally.so form embedded in site
+
+**SEO Foundation**
+- Submit sitemap to Google Search Console
+- First 3 blog posts published and indexed
+- Ensure all prompt pages have complete meta tags + OG images
+
+### Launch Day
+
+**Distribution Channels**
+| Channel | Action | Expected Reach |
+|---|---|---|
+| Product Hunt | Launch as "Maker" — schedule for Tuesday 12:01am PT | 2,000–10,000 visits |
+| r/india + r/artificial | Post: "Built the first AI prompt platform for Indian creators" | 500–2,000 visits |
+| X/Twitter | Thread: "I rebuilt my side project — here's what I learned" | 200–1,000 visits |
+| LinkedIn | Post about building with AI stack | 100–500 visits |
+| WhatsApp groups | Share in 5–10 creator/tech groups | 200–500 visits |
+| Instagram Reels | 30s screen recording of the site — post as Reel | Organic reach |
+
+**Launch Day Monitoring**
+- Uptime Robot alerts active
+- Sentry error monitoring live
+- PostHog dashboard open
+- Vercel auto-scaling enabled
+
+### Post-Launch Growth (Month 1–3)
+
+**Content Marketing**
+- Publish 2 SEO articles/week targeting high-volume prompt keywords
+- Weekly "Prompt Pack" drop — 20 curated prompts on a theme, promoted across channels
+
+**Community Building**
+- Respond to every Reddit comment, DM within 24h
+- Weekly Discord "Prompt Challenge" — users share results
+- Feature community-submitted prompts on homepage ("Community Pick")
+
+**Creator Outreach**
+- Partner with 5 Indian AI art creators (1,000–10,000 followers) — they get Pro free, we get shoutouts
+- "Made with Prompty" watermark option on shared images — viral loop
+
+**Referral Program (Month 2)**
+- "Invite 3 friends → unlock unlimited copies for a month"
+- Unique referral link in profile page
+
+---
+
+## 24. Risk Register
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Scraper sources block our IP | High | Medium | Rotate IPs via Railway, add per-domain rate limiting, use official APIs first |
+| Scraped content violates ToS | Medium | High | Only use public APIs where ToS permits; add attribution + source link to every prompt; respond to takedowns within 24h |
+| NSFW content slips through | Medium | High | Claude Haiku NSFW check + keyword blocklist + community reporting flag |
+| Low initial content quality | Medium | High | Manual curation of first 500 prompts; quality_score ≥ 7 auto-approve threshold |
+| Google OAuth breaks | Low | High | Supabase handles OAuth; fallback email login always available |
+| Supabase free tier limits hit | Medium | Medium | Monitor DB size + API calls; upgrade to Pro ($25/mo) at 5,000 users |
+| Cloudflare R2 costs spike | Low | Low | Cap scraper image storage at 10GB, then compress or drop low-quality images |
+| Product Hunt launch flops | Medium | Low | Not dependent on single channel; launch on Tuesday (best day), have upvote squad ready |
+| Competitor copies the concept | Medium | Low | Speed advantage; build community moat; Hindi/regional prompts are hard to replicate |
+| Performance degrades at scale | Low | High | Aggressive Redis caching, ISR, CDN for images; load test before launch with k6 |
+| DPDP Act compliance gap | Low | High | Implement data deletion flow in Phase 1; get legal review before 10,000 users |
+| Payment gateway issues (Razorpay) | Low | Medium | Test thoroughly; have Stripe as backup for international users |
+
+---
+
+## 25. PWA & Mobile App Roadmap
+
+### Phase 1 — PWA (Launch)
+
+Progressive Web App capabilities ship with the initial launch:
+
+- **Web App Manifest** (`/manifest.json`):
+  - `display: standalone` — hides browser chrome when added to home screen
+  - App name: "Prompty", short_name: "Prompty"
+  - Theme color: `#0A0A0F`, background: `#0A0A0F`
+  - Icons: 192×192, 512×512 PNG
+  - `orientation: portrait`
+
+- **Service Worker** (via `next-pwa` or manual):
+  - Cache strategy: **Stale-While-Revalidate** for prompt images
+  - Cache strategy: **Network-First** for API data
+  - Offline page: "You're offline — here are your saved prompts" (from localStorage)
+
+- **Add to Home Screen prompt:**
+  - Show custom install banner after 2nd visit + 1 copy action
+  - Track install events in PostHog
+
+- **Share Target API:**
+  - Register as share target so users can share images *to* Prompty for prompt inspiration
+
+### Phase 2 — React Native App (Month 6+)
+
+Trigger: 10,000 monthly active users on web, proven retention metrics.
+
+**Tech:** Expo + React Native (shared codebase for iOS + Android)
+
+**Why Expo:**
+- 80% of UI can be shared with web (via `expo-router` + universal components)
+- OTA updates via Expo EAS — no app store review for minor changes
+- Push notifications via `expo-notifications`
+- Play Store distribution — massive reach for Indian Android users
+
+**App-Specific Features (beyond web):**
+- **Push notifications** — new prompts in followed categories, weekly digest
+- **Camera integration** — photograph inspiration → "Find prompts for this image" (future AI feature)
+- **Haptic feedback** — subtle vibration on copy/like
+- **Offline mode** — save prompts to device for use without internet
+- **Widgets** — "Prompt of the Day" iOS/Android widget
+
+**Distribution Strategy:**
+- Launch on Play Store first (Android dominates India — 95%+ of target users)
+- iOS App Store 4–6 weeks later
+- App Store optimization: keywords "AI image prompts", "Midjourney prompts India"
+
+---
+
+## Appendix B — Environment Variables
+
+```env
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=          # server-side only
+
+# Cloudflare R2
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=
+R2_PUBLIC_URL=                      # CDN URL prefix
+
+# Upstash Redis (caching + rate limiting)
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+
+# Anthropic (Claude Haiku classifier)
+ANTHROPIC_API_KEY=
+
+# Resend (email)
+RESEND_API_KEY=
+
+# PostHog (analytics)
+NEXT_PUBLIC_POSTHOG_KEY=
+NEXT_PUBLIC_POSTHOG_HOST=
+
+# Razorpay (payments)
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+
+# App
+NEXT_PUBLIC_APP_URL=https://prompty.in
+NEXT_PUBLIC_APP_ENV=production       # development | staging | production
+ADMIN_USER_IDS=                      # comma-separated UUID list
+```
+
+---
+
+## Appendix C — Folder Structure
+
+```
+prompty.in/
+├── app/                          # Next.js App Router
+│   ├── (marketing)/              # Route group: homepage, about, blog
+│   │   ├── page.tsx              # Home
+│   │   └── blog/
+│   ├── (app)/                    # Route group: auth-gated + main app
+│   │   ├── explore/
+│   │   ├── p/[slug]/             # Individual prompt page
+│   │   ├── category/[name]/
+│   │   ├── tool/[name]/
+│   │   ├── u/[username]/
+│   │   └── collections/
+│   ├── admin/                    # Admin dashboard
+│   ├── api/                      # API routes (Edge Runtime)
+│   │   ├── prompts/
+│   │   ├── search/
+│   │   ├── collections/
+│   │   └── webhooks/
+│   └── layout.tsx
+├── components/
+│   ├── ui/                       # shadcn/ui base components
+│   ├── prompt/                   # PromptCard, PromptGrid, PromptPage
+│   ├── search/                   # SearchModal, SearchResults
+│   ├── layout/                   # Header, MobileNav, Footer
+│   └── shared/                   # Toast, Modal, Sheet
+├── lib/
+│   ├── supabase/                 # Client + server helpers
+│   ├── redis.ts                  # Upstash client
+│   ├── trending.ts               # Score algorithm
+│   └── utils.ts
+├── hooks/                        # usePrompts, useSearch, useInfiniteScroll
+├── stores/                       # Zustand stores (filters, user)
+├── types/                        # TypeScript interfaces
+├── scraper/                      # Python scraper (separate service)
+│   ├── workers/
+│   ├── classifier.py
+│   └── pipeline.py
+└── public/
+    ├── manifest.json
+    └── icons/
+```
+
+---
+
+*Document Owner: Vijith | Next Review: After Phase 1 completion | Version 1.1 — Sections 19–25 + Appendices B–C added May 2026*
