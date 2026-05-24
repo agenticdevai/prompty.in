@@ -1,3 +1,5 @@
+import type { Variants, Easing } from "motion/react";
+
 export const spring = {
   snappy: { type: "spring" as const, stiffness: 400, damping: 28 },
   gentle: { type: "spring" as const, stiffness: 200, damping: 24 },
@@ -12,15 +14,15 @@ export const duration = {
 
 export const fadeUp = {
   initial: { opacity: 0, y: 12 },
-  animate: { opacity: 1, y: 0, transition: { duration: duration.normal, ease: "easeOut" } },
-  exit: { opacity: 0, y: -8, transition: { duration: 0.15, ease: "easeIn" } },
+  animate: { opacity: 1, y: 0, transition: { duration: duration.normal, ease: "easeOut" as Easing } },
+  exit: { opacity: 0, y: -8, transition: { duration: 0.15, ease: "easeIn" as Easing } },
 };
 
 export const staggerChildren = {
   animate: { transition: { staggerChildren: 0.04 } },
 };
 
-export const cardItem = {
+export const cardItem: Variants = {
   initial: { opacity: 0, y: 20 },
-  animate: { opacity: 1, y: 0, transition: { duration: duration.normal, ease: "easeOut" } },
+  animate: { opacity: 1, y: 0, transition: { duration: duration.normal, ease: "easeOut" as Easing } },
 };
